@@ -7,4 +7,5 @@ transformers
 numpy 
 pydantic
 huggingface_hub
+tiktoken
 
