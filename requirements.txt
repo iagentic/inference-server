@@ -13,5 +13,6 @@ accelerate>=0.26.0'
 python-multipart
 TTS 
 soundfile
+gradio
 
 
