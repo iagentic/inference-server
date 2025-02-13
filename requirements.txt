@@ -1,0 +1,10 @@
+faster-whisper
+fastapi 
+uvicorn 
+websockets 
+torch 
+transformers  
+numpy 
+pydantic
+huggingface_hub
+
