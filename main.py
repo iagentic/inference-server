@@ -1,78 +1,72 @@
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, UploadFile, File
-import asyncio
-import websockets
-import json
-import torch
 import os
-from pathlib import Path
-from transformers import AutoModelForCausalLM, AutoTokenizer
-from faster_whisper import WhisperModel
-import numpy as np
+import torch
+import asyncio
+import json
 import shutil
-from typing import List
+import numpy as np
+from pathlib import Path
+from transformers import AutoTokenizer, AutoModelForCausalLM
+from faster_whisper import WhisperModel
+from huggingface_hub import login, snapshot_download
 
 app = FastAPI(
-    title="OpenAI-Compatible FastAPI Server",
+    title="LLaMA 3.2 FastAPI Server",
     version="0.1.0",
     openapi_version="3.1.0"
 )
 
-# Model directories
+# ✅ Authenticate with Hugging Face
+HF_TOKEN = os.getenv("HUGGINGFACE_TOKEN")  # Ensure token is set
+if not HF_TOKEN:
+    raise ValueError("Missing Hugging Face Token. Run 'huggingface-cli login' or set HUGGINGFACE_TOKEN.")
+
+login(token=HF_TOKEN)
+
+# ✅ Model Paths & Directories
 MODEL_DIR = Path("./models")
-LLAMA_MODEL_NAME = "TheBloke/LLaMA-7B-GGUF"  # Replace with desired model
-LLAMA_MODEL_PATH = MODEL_DIR / "llama-7b"
-WHISPER_MODEL_NAME = "large-v2"  # Use "small", "medium", or "large" based on performance needs
+LLAMA_MODEL_NAME = "meta-llama/Llama-3.2-1B-Instruct"
 
-# Ensure model directory exists
+# LLAMA_MODEL_NAME = "meta-llama/Llama-3.2-1B-Instruct-SpinQuant_INT4_EO8"
+LLAMA_MODEL_PATH = MODEL_DIR / "llama-3"
+
+# ✅ Ensure model directory exists
 MODEL_DIR.mkdir(parents=True, exist_ok=True)
-
-# Load FasterWhisper model (default: float16, auto-select device)
-whisper_model = WhisperModel(WHISPER_MODEL_NAME, device="cuda" if torch.cuda.is_available() else "cpu")
-
-# Dictionary to track loaded models
 loaded_models = {}
+def download_llama_model():
+    """Download and load LLaMA 3.2 1B INT4"""
+    if not LLAMA_MODEL_PATH.exists():
+        print(f"Downloading LLaMA model: {LLAMA_MODEL_NAME}...")
+        snapshot_download(repo_id=LLAMA_MODEL_NAME, local_dir=LLAMA_MODEL_PATH)
+    
+    print(f"Loading model from {LLAMA_MODEL_PATH}...")
+    tokenizer = AutoTokenizer.from_pretrained(LLAMA_MODEL_NAME)
+    model = AutoModelForCausalLM.from_pretrained(LLAMA_MODEL_NAME, torch_dtype=torch.float16, device_map="auto")
+    loaded_models["llama"] = LLAMA_MODEL_NAME
 
-def download_model(model_name: str, model_path: Path):
-    """Download model from Hugging Face if not present."""
-    if not model_path.exists():
-        print(f"Downloading model: {model_name}...")
-        from huggingface_hub import snapshot_download
-        snapshot_download(repo_id=model_name, local_dir=model_path)
-    else:
-        print(f"Model found at {model_path}")
-
-def load_llama_model():
-    """Load LLaMA model into memory."""
-    download_model(LLAMA_MODEL_NAME, LLAMA_MODEL_PATH)
-    tokenizer = AutoTokenizer.from_pretrained(LLAMA_MODEL_PATH)
-    model = AutoModelForCausalLM.from_pretrained(
-        LLAMA_MODEL_PATH, torch_dtype=torch.float16, device_map="auto"
-    )
     return tokenizer, model
 
-# Load LLaMA model
-llama_tokenizer, llama_model = load_llama_model()
-loaded_models["llama"] = llama_model
+# ✅ Load LLaMA 3.2 model
+llama_tokenizer, llama_model = download_llama_model()
+
+# ✅ Load FasterWhisper (for speech-to-text)
+whisper_model = WhisperModel("large-v2", device="cuda" if torch.cuda.is_available() else "cpu")
 
 async def generate_text(prompt: str):
-    """Generate text using LLaMA."""
+    """Generate text using LLaMA 3.2"""
     inputs = llama_tokenizer(prompt, return_tensors="pt").to("cuda")
     outputs = llama_model.generate(**inputs, max_length=500)
     return llama_tokenizer.decode(outputs[0], skip_special_tokens=True)
 
 async def transcribe_audio(audio_bytes):
-    """Transcribe audio using FasterWhisper."""
+    """Transcribe audio using FasterWhisper"""
     audio_np = np.frombuffer(audio_bytes, dtype=np.int16)
     segments, _ = whisper_model.transcribe(audio_np)
-    
-    # Combine transcription results
-    transcription = " ".join(segment.text for segment in segments)
-    return transcription
+    return " ".join(segment.text for segment in segments)
 
-# WebSocket for real-time chat
 @app.websocket("/ws/{client_id}")
 async def websocket_endpoint(websocket: WebSocket, client_id: str):
-    """Real-time AI interactions via WebSocket."""
+    """Real-time AI interactions via WebSocket"""
     await websocket.accept()
     try:
         while True:
@@ -92,19 +86,17 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
     except WebSocketDisconnect:
         print(f"Client {client_id} disconnected.")
 
-# Chat Completion API
 @app.post("/v1/chat/completions")
 async def chat_completion(payload: dict):
-    """Handle chat completions."""
+    """Handle chat completions"""
     messages = payload.get("messages", [])
     user_message = messages[-1]["content"] if messages else "Hello"
     response_text = await generate_text(user_message)
     return {"id": "chatcmpl-xyz", "object": "chat.completion", "created": 1234567890, "choices": [{"message": {"role": "assistant", "content": response_text}}]}
 
-# Speech-to-Text API
 @app.post("/v1/audio/transcriptions")
 async def transcribe_file(file: UploadFile = File(...)):
-    """Transcribe an uploaded audio file."""
+    """Transcribe an uploaded audio file"""
     temp_audio_path = f"./temp_{file.filename}"
     with open(temp_audio_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
