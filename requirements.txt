@@ -8,4 +8,7 @@ numpy
 pydantic
 huggingface_hub
 tiktoken
+blobfile
+accelerate>=0.26.0'
+python-multipart
 
