@@ -5,19 +5,23 @@ import asyncio
 import json
 import shutil
 import numpy as np
+import soundfile as sf
 from pathlib import Path
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from faster_whisper import WhisperModel
 from huggingface_hub import login, snapshot_download
+from TTS.api import TTS
+from io import BytesIO
+from fastapi.responses import FileResponse, StreamingResponse
 
 app = FastAPI(
-    title="LLaMA 3.2 FastAPI Server",
+    title="LLaMA 3.2 FastAPI Server with TTS",
     version="0.1.0",
     openapi_version="3.1.0"
 )
 
 # ✅ Authenticate with Hugging Face
-HF_TOKEN = os.getenv("HUGGINGFACE_TOKEN")  # Ensure token is set
+HF_TOKEN = os.getenv("HUGGINGFACE_TOKEN")
 if not HF_TOKEN:
     raise ValueError("Missing Hugging Face Token. Run 'huggingface-cli login' or set HUGGINGFACE_TOKEN.")
 
@@ -26,15 +30,20 @@ login(token=HF_TOKEN)
 # ✅ Model Paths & Directories
 MODEL_DIR = Path("./models")
 LLAMA_MODEL_NAME = "meta-llama/Llama-3.2-1B-Instruct"
-
-# LLAMA_MODEL_NAME = "meta-llama/Llama-3.2-1B-Instruct-SpinQuant_INT4_EO8"
 LLAMA_MODEL_PATH = MODEL_DIR / "llama-3"
 
 # ✅ Ensure model directory exists
 MODEL_DIR.mkdir(parents=True, exist_ok=True)
-loaded_models = {}
+
+loaded_models = {
+    "llama": LLAMA_MODEL_NAME,
+    "whisper": "faster-whisper-large-v2",
+    "tts": "coqui-tts"
+}
+
+# ✅ LLaMA Model Loading
 def download_llama_model():
-    """Download and load LLaMA 3.2 1B INT4"""
+    """Download and load LLaMA 3.2 1B"""
     if not LLAMA_MODEL_PATH.exists():
         print(f"Downloading LLaMA model: {LLAMA_MODEL_NAME}...")
         snapshot_download(repo_id=LLAMA_MODEL_NAME, local_dir=LLAMA_MODEL_PATH)
@@ -42,8 +51,6 @@ def download_llama_model():
     print(f"Loading model from {LLAMA_MODEL_PATH}...")
     tokenizer = AutoTokenizer.from_pretrained(LLAMA_MODEL_NAME)
     model = AutoModelForCausalLM.from_pretrained(LLAMA_MODEL_NAME, torch_dtype=torch.float16, device_map="auto")
-    loaded_models["llama"] = LLAMA_MODEL_NAME
-
     return tokenizer, model
 
 # ✅ Load LLaMA 3.2 model
@@ -51,6 +58,10 @@ llama_tokenizer, llama_model = download_llama_model()
 
 # ✅ Load FasterWhisper (for speech-to-text)
 whisper_model = WhisperModel("large-v2", device="cuda" if torch.cuda.is_available() else "cpu")
+
+# ✅ Load Coqui-TTS (Text-to-Speech)
+tts_model_name = "tts_models/en/ljspeech/tacotron2-DDC"  # Default model
+tts_model = TTS(tts_model_name)
 
 async def generate_text(prompt: str):
     """Generate text using LLaMA 3.2"""
@@ -107,50 +118,49 @@ async def transcribe_file(file: UploadFile = File(...)):
     transcription = " ".join(segment.text for segment in segments)
     return {"text": transcription}
 
+# ✅ Text-to-Speech API (Coqui-TTS) - OpenAI Spec
+@app.post("/v1/audio/speech")
+async def synthesize_speech(request: dict):
+    """Synthesize speech from text input using Coqui-TTS."""
+    text = request.get("input", "")
+    voice = request.get("voice", "default")  # Placeholder, customize for multiple voices
+    model_id = request.get("model", tts_model_name)
+
+    if not text:
+        raise HTTPException(status_code=400, detail="No text provided for synthesis.")
+
+    # Generate speech
+    output_audio_path = "output_tts.wav"
+    tts_model.tts_to_file(text=text, file_path=output_audio_path)
+
+    # Convert to MP3 (Coqui outputs WAV by default)
+    audio_data, samplerate = sf.read(output_audio_path)
+    mp3_bytes_io = BytesIO()
+    sf.write(mp3_bytes_io, audio_data, samplerate, format="MP3")
+    mp3_bytes_io.seek(0)
+
+    return StreamingResponse(mp3_bytes_io, media_type="audio/mpeg")
+
+@app.get("/v1/audio/speech/voices")
+async def list_voices():
+    """List available TTS voices (placeholder)"""
+    voices = ["default"]
+    return {"voices": voices}
+
 # Model Management APIs
 @app.get("/v1/models")
 async def get_models():
-    """List available models."""
-    return {"data": [{"id": model, "object": "model"} for model in loaded_models.keys()], "object": "list"}
+    """List available models including LLaMA, Whisper, and TTS"""
+    return {
+        "data": [{"id": model, "object": "model"} for model in loaded_models.values()],
+        "object": "list"
+    }
 
 @app.get("/v1/models/{model_name}")
 async def get_model(model_name: str):
     """Retrieve model details."""
     if model_name in loaded_models:
         return {"id": model_name, "object": "model", "created": 1234567890}
-    raise HTTPException(status_code=404, detail="Model not found")
-
-@app.post("/api/pull/{model_id}")
-async def pull_model(model_id: str):
-    """Download model from Hugging Face if not available locally."""
-    model_path = MODEL_DIR / model_id
-    download_model(model_id, model_path)
-    return {"status": "Model downloaded", "model_id": model_id}
-
-@app.get("/api/ps")
-async def get_running_models():
-    """List currently loaded models."""
-    return {"models": list(loaded_models.keys())}
-
-@app.post("/api/ps/{model_id}")
-async def load_model_route(model_id: str):
-    """Load a model into memory."""
-    model_path = MODEL_DIR / model_id
-    if not model_path.exists():
-        return {"error": "Model not found locally. Please pull the model first."}
-    
-    tokenizer = AutoTokenizer.from_pretrained(model_path)
-    model = AutoModelForCausalLM.from_pretrained(model_path, torch_dtype=torch.float16, device_map="auto")
-    
-    loaded_models[model_id] = model
-    return {"status": "Model loaded", "model_id": model_id}
-
-@app.delete("/api/ps/{model_id}")
-async def stop_running_model(model_id: str):
-    """Unload a model from memory."""
-    if model_id in loaded_models:
-        del loaded_models[model_id]
-        return {"status": "Model unloaded", "model_id": model_id}
     raise HTTPException(status_code=404, detail="Model not found")
 
 # Health check
