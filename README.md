@@ -6,6 +6,7 @@
 ## python gradio_test.py
 # install ultravox 
 # sudo apt-get install libportaudio2
+# sudo apt install portaudio19-dev
 
 # pip install torch torchaudio einops timm pillow
 # pip install git+https://github.com/huggingface/transformers
