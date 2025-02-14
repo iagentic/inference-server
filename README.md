@@ -8,10 +8,11 @@
 # sudo apt-get install libportaudio2
 
 # pip install torch torchaudio einops timm pillow
-pip install git+https://github.com/huggingface/transformers
-pip install git+https://github.com/huggingface/accelerate
-pip install git+https://github.com/huggingface/diffusers
-pip install huggingface_hub
-pip install sentencepiece bitsandbytes protobuf decord
-pip install librosa peft numpy
+# pip install git+https://github.com/huggingface/transformers
+# pip install git+https://github.com/huggingface/accelerate
+# pip install git+https://github.com/huggingface/diffusers
+# pip install huggingface_hub
+# pip install sentencepiece bitsandbytes protobuf decord
+#  pip install librosa peft numpy
+#  pip install pyaudio
 
