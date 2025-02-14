@@ -3,11 +3,16 @@ import transformers
 import numpy as np
 import librosa
 import io
+import torch
 
 app = FastAPI()
 
 # Load Ultravox model
-pipe = transformers.pipeline(model='fixie-ai/ultravox-v0_4_1-llama-3_1-8b', trust_remote_code=True)
+pipe = transformers.pipeline(model='fixie-ai/ultravox-v0_4', trust_remote_code=True)
+
+# Ensure torch_dtype is set correctly
+if isinstance(pipe.model.config.torch_dtype, str):
+    pipe.model.config.torch_dtype = getattr(torch, pipe.model.config.torch_dtype, torch.float32)
 
 @app.post("/process-audio/")
 async def process_audio(file: UploadFile = File(...)):
@@ -29,4 +34,3 @@ async def process_audio(file: UploadFile = File(...)):
     response = pipe({'audio': audio_np, 'turns': turns, 'sampling_rate': sr}, max_new_tokens=30)
 
     return {"response": response}
-
