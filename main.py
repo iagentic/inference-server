@@ -9,6 +9,7 @@ import soundfile as sf
 from pathlib import Path
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from faster_whisper import WhisperModel
+import whisperx
 from huggingface_hub import login, snapshot_download
 from TTS.api import TTS
 from io import BytesIO
@@ -57,7 +58,9 @@ def download_llama_model():
 llama_tokenizer, llama_model = download_llama_model()
 
 # ✅ Load FasterWhisper (for speech-to-text)
-whisper_model = WhisperModel("large-v2", device="cuda" if torch.cuda.is_available() else "cpu")
+#whisper_model = WhisperModel("large-v2", device="cuda" if torch.cuda.is_available() else "cpu")
+device = "cuda"  # or "cpu"
+whisper_model = whisperx.load_model("large-v2", device)
 
 # ✅ Load Coqui-TTS (Text-to-Speech)
 tts_model_name = "tts_models/en/ljspeech/tacotron2-DDC"  # Default model
