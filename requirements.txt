@@ -12,7 +12,8 @@ tiktoken
 blobfile
 accelerate>=0.26.0'
 python-multipart
-TTS 
+coqui-tts
+#TTS 
 soundfile
 gradio
 
